@@ -1,0 +1,16 @@
+[package]
+name = "contram-ticket-automated"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4.39"
+chrono-tz = "0.10.1"
+clap = { version = "4.5.27", features = ["derive", "env"] }
+color-eyre = "0.6.3"
+reqwest = { version = "0.12.12", features = ["blocking"] }
+serde = { version = "1.0.217", features = ["derive"] }
+serde_json = "1.0.138"
+teloxide = { version = "0.13.0", features = ["macros", "teloxide-macros"] }
+thirtyfour = "0.35.0"
+tokio = { version = "1.43.0", features = ["rt-multi-thread", "macros", "rt"] }
