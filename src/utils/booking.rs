@@ -1,12 +1,9 @@
+use crate::user::User;
 use color_eyre::eyre::Error;
-use reqwest::blocking::Client;
+use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
-use thirtyfour::{prelude::*, support::sleep};
-
-use std::time::Duration;
-
-use crate::user::User;
+use thirtyfour::prelude::*;
 
 #[derive(Debug, Deserialize)]
 struct Fermata {
@@ -16,50 +13,45 @@ struct Fermata {
     id: u32,
 }
 
-pub fn get_cities() -> Vec<(String, u32)> {
+pub async fn get_cities() -> Result<Vec<(String, u32)>, Error> {
     let api_url = "https://marcheroma.contram.it/api/fermata/partenza";
-    let client = Client::builder().build().unwrap();
+    let client = Client::new();
+    let response = client.get(api_url).send().await?;
 
-    let response = client.get(api_url).send();
-
-    let mut cities = match response.and_then(|r| r.json::<Vec<Fermata>>()) {
-        Ok(json) => json.iter().map(|f| (f.name.clone(), f.id)).collect(),
-        Err(e) => {
-            println!("Error fetching cities: {}", e);
-            println!("Using default cities");
-            // Default cities with their IDs
+    let cities = match response.json::<Vec<Fermata>>().await {
+        Ok(json) => json.into_iter().map(|f| (f.name, f.id)).collect(),
+        Err(_) => {
+            println!("Error fetching cities, using default cities");
             vec![
-                (String::from("Camerino"), 24),
-                (String::from("Ancona Piazza Cavour"), 38),
-                (String::from("Ancona Stazione F.S."), 39),
-                (String::from("Civitanova Marche Via Sonnino"), 42),
-                (String::from("Porto San Giorgio"), 53),
+                ("Camerino".to_string(), 24),
+                ("Ancona Piazza Cavour".to_string(), 38),
+                ("Ancona Stazione F.S.".to_string(), 39),
+                ("Civitanova Marche Via Sonnino".to_string(), 42),
+                ("Porto San Giorgio".to_string(), 53),
             ]
         }
     };
 
-    cities.sort_by_key(|&(_, id)| id);
-    cities
+    let mut sorted_cities = cities;
+    sorted_cities.sort_by_key(|&(_, id)| id);
+    Ok(sorted_cities)
 }
 
-pub fn get_city_by_id(cities: &[(String, u32)], target_id: u32) -> Option<&str> {
+pub fn validate_city_id(cities: &[(String, u32)], target_id: u32) -> Result<&str, Error> {
     cities
         .binary_search_by(|(_, id)| id.cmp(&target_id))
-        .ok()
         .map(|idx| &cities[idx].0[..])
+        .map_err(|_| Error::msg(format!("Invalid city ID: {}", target_id)))
 }
 
-pub async fn find_and_wait_clickable(
-    driver: &WebDriver,
-    by: By,
-    text: String,
-) -> Result<WebElement, Error> {
+pub async fn find_and_wait(driver: &WebDriver, by: By, text: String) -> Result<WebElement, Error> {
     let element = driver
         .query(by)
         .with_text(text)
         .and_clickable()
         .first()
         .await?;
+    element.scroll_into_view().await?;
     Ok(element)
 }
 
@@ -89,19 +81,13 @@ pub async fn book_ticket(
     to_id: u32,
     date: String,
     is_headless: Option<bool>,
-    wait_time: Option<u64>,
 ) -> Result<String, Error> {
-    let duration_wait = Duration::from_secs(wait_time.unwrap_or(5));
-
-    // Fill form from configuration file
-    println!("Loaded User JSON configuration: \n{:?}", user);
-
-    let cities = get_cities();
-
-    // Validate cities
-    let city_from = get_city_by_id(&cities, from_id).expect("Invalid departure city");
-    let city_to = get_city_by_id(&cities, to_id).expect("Invalid arrival city");
-
+    // Fetch cities and validate IDs
+    let cities = get_cities()
+        .await
+        .expect("❌ Failed to fetch cities. Please try again later.");
+    let city_from = validate_city_id(&cities, from_id).expect("❌ Departure city not found");
+    let city_to = validate_city_id(&cities, to_id).expect("❌ Arrival city not found");
     println!("Departing from {} to {} on {}", city_from, city_to, date);
 
     // Initialize WebDriver
@@ -119,53 +105,41 @@ pub async fn book_ticket(
         from_id, to_id, date
     );
     driver.goto(&url).await?;
-
     println!("Loaded URL: {}", url);
 
-    // /html/body/div[2]/div[6]/div/div/table/tbody/tr/td[4]/form/button
-    let btn_submit =
-        find_and_wait_clickable(&driver, By::Tag("button"), "Prenota".to_string()).await?;
+    // Wait for the booking button to be clickable and click it
+    let btn_submit = find_and_wait(&driver, By::Tag("button"), "Prenota".to_string()).await?;
     btn_submit.click().await?;
     println!("Submitted booking form");
-    sleep(duration_wait).await;
 
-    // Go to cart
+    // Explicit wait for navigation to cart
     driver
         .goto("https://marcheroma.contram.it/Home/RitornaCarrello?")
         .await?;
-
     println!("Navigated to cart");
 
+    // Fill form fields
     fill_form_fields(&driver, user).await?;
 
-    sleep(duration_wait).await;
-
     // Final submission
-    // /html/body/div[2]/form/div/button
-    let btn_submit = find_and_wait_clickable(
+    let btn_submit = find_and_wait(
         &driver,
         By::Tag("button"),
         "Procedi all'acquisto".to_string(),
     )
     .await?;
-    btn_submit.scroll_into_view().await?;
     btn_submit.click().await?;
 
-    sleep(duration_wait).await;
-
-    let btn_submit =
-        find_and_wait_clickable(&driver, By::Tag("button"), "Conferma acquisto".to_string())
-            .await?;
-    btn_submit.scroll_into_view().await?;
-    btn_submit.click().await?;
-
+    // Confirm purchase
+    let btn_confirm =
+        find_and_wait(&driver, By::Tag("button"), "Conferma acquisto".to_string()).await?;
+    btn_confirm.click().await?;
     println!(
         "Submitted final booking form, an email will be sent to: {}",
         user.get_email()
     );
 
     driver.quit().await?;
-
     Ok(format!(
         "Ticket booked from {} to {} on {}\nAn email will be sent to: {}",
         city_from,

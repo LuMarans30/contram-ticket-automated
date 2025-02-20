@@ -11,8 +11,8 @@ use teloxide::{
 
 use crate::{
     User,
-    util::{get_stickers, send_cached_sticker},
     utils::file_manager::TelegramUser,
+    utils::sticker::{get_stickers, send_cached_sticker},
 };
 
 use crate::utils::booking::*;
@@ -192,7 +192,7 @@ async fn handle_deleteuser(bot: Bot, msg: Message) -> HandlerResult {
 }
 
 async fn handle_getcities(bot: Bot, msg: Message) -> HandlerResult {
-    let cities = get_cities();
+    let cities = get_cities().await?;
     let cities_list = cities
         .iter()
         .map(|(name, id)| format!("{}. {}", id, name))
@@ -211,74 +211,40 @@ async fn handle_bookticket(bot: Bot, msg: Message, args: String) -> HandlerResul
     // Argument parsing and validation
     let parts: Vec<&str> = args.split_whitespace().collect();
     if parts.len() != 3 {
-        send_cached_sticker(
+        send_message(
             bot.clone(),
             msg.clone(),
-            get_stickers()
-                .get("error_cat_invalid_syntax")
-                .unwrap()
+            "❌ Invalid command syntax.\nUsage: /bookticket <from> <to> <date> (YYYY-MM-DD)"
                 .to_string(),
+            Some("error_cat_invalid_syntax"),
         )
         .await;
-        bot.send_message(
-            msg.chat.id,
-            "❌ Invalid command syntax.\nUsage: /bookticket <from> <to> <date> (YYYY-MM-DD)",
-        )
-        .await?;
+
+        return Err("Invalid command syntax".into());
     }
 
     let from = parts[0].parse::<u32>();
     let to = parts[1].parse::<u32>();
     let date = parts[2].to_string();
-    let cities = get_cities();
 
     let file_manager = FileManager::new("users.json");
 
     let user = match file_manager.get_user(get_username(msg.clone()).await?) {
-        Ok(user) => {
-            bot.send_message(msg.chat.id, user.user_data.to_string())
-                .await?;
-            user
-        }
+        Ok(user) => user,
         Err(e) => {
-            let error_message = match e.kind() {
+            bot.send_message(msg.chat.id, match e.kind() {
                 // Handle file not found specifically
                 ErrorKind::NotFound => "❌ No user registered yet!\nUse /createuser to register.",
                 _ => "❌ Failed to access user data. Please try again later.",
-            };
-
-            bot.send_message(msg.chat.id, error_message).await?;
-            return Ok(());
+            })
+            .await?;
+            return Err("User not found".into());
         }
     };
 
-    if from.is_err() || to.is_err() {
-        send_message(
-            bot.clone(),
-            msg.clone(),
-            "❌ Arrival city ID not found.".to_string(),
-            Some("error_cat_invalid_syntax"),
-        )
-        .await;
-        send_cached_sticker(
-            bot.clone(),
-            msg.clone(),
-            get_stickers()
-                .get("error_cat_invalid_syntax")
-                .unwrap()
-                .to_string(),
-        )
-        .await;
-        bot.send_message(msg.chat.id, "❌ Invalid city ID.").await?;
-        return Ok(());
-    }
-
-    let id_from = from.unwrap();
-    let id_to = to.unwrap();
-
-    let city_from = match get_city_by_id(&cities, id_from) {
-        Some(city) => city,
-        None => {
+    let id_from = match from {
+        Ok(id) => id,
+        Err(_e) => {
             send_message(
                 bot.clone(),
                 msg.clone(),
@@ -286,13 +252,13 @@ async fn handle_bookticket(bot: Bot, msg: Message, args: String) -> HandlerResul
                 Some("error_cat_invalid_syntax"),
             )
             .await;
-            return Ok(());
+            return Err("Departure city ID not found".into());
         }
     };
 
-    let city_to = match get_city_by_id(&cities, id_to) {
-        Some(city) => city,
-        None => {
+    let id_to = match to {
+        Ok(id) => id,
+        Err(_e) => {
             send_message(
                 bot.clone(),
                 msg.clone(),
@@ -300,18 +266,9 @@ async fn handle_bookticket(bot: Bot, msg: Message, args: String) -> HandlerResul
                 Some("error_cat_invalid_syntax"),
             )
             .await;
-            return Ok(());
+            return Err("Arrival city ID not found".into());
         }
     };
-
-    bot.send_message(
-        msg.chat.id,
-        format!(
-            "🚌 Booking ticket from {} to {} on {}.\nPlease wait... ⏳",
-            city_from, city_to, date
-        ),
-    )
-    .await?;
 
     let parsed_date = match NaiveDate::parse_from_str(&date, "%Y-%m-%d") {
         Ok(d) => d,
@@ -323,7 +280,7 @@ async fn handle_bookticket(bot: Bot, msg: Message, args: String) -> HandlerResul
                 Some("error_cat_invalid_syntax"),
             )
             .await;
-            return Ok(());
+            return Err("Invalid date format".into());
         }
     };
 
@@ -349,7 +306,7 @@ async fn handle_bookticket(bot: Bot, msg: Message, args: String) -> HandlerResul
             Some("error_cat_invalid_syntax"),
         )
         .await;
-        return Ok(());
+        return Err("Invalid date".into());
     }
 
     // Wait until booking opens every minute
@@ -371,30 +328,22 @@ async fn handle_bookticket(bot: Bot, msg: Message, args: String) -> HandlerResul
         sleep(Duration::seconds(1).to_std().unwrap()); // Buffer for precision issues
     }
 
-    let response = match book_ticket(&user.user_data, id_from, id_to, date, Some(false), None).await
-    {
+    let response = match book_ticket(&user.user_data, id_from, id_to, date, Some(false)).await {
         Ok(r) => r,
         Err(e) => {
             send_message(
                 bot.clone(),
                 msg.clone(),
-                format!("❌ Booking failed: {}", e),
-                Some("error_cat"),
+                e.to_string(),
+                Some("error_cat_invalid_syntax"),
             )
             .await;
-            return Ok(());
+            return Err(e.to_string().into());
         }
     };
 
     println!("Response from book_ticket: {}", response);
-
-    send_cached_sticker(
-        bot.clone(),
-        msg.clone(),
-        get_stickers().get("success_cat").unwrap().to_string(),
-    )
-    .await;
-    bot.send_message(msg.chat.id, response).await?;
+    send_message(bot.clone(), msg.clone(), response, Some("success_cat")).await;
     Ok(())
 }
 
