@@ -85,8 +85,8 @@ pub async fn fill_field(driver: &WebDriver, field: &str, value: &str) -> Result<
 
 pub async fn book_ticket(
     user: &User,
-    city_from: u32,
-    city_to: u32,
+    from_id: u32,
+    to_id: u32,
     date: String,
     is_headless: Option<bool>,
     wait_time: Option<u64>,
@@ -99,8 +99,8 @@ pub async fn book_ticket(
     let cities = get_cities();
 
     // Validate cities
-    let from_id = get_city_by_id(&cities, city_from).expect("Invalid departure city");
-    let to_id = get_city_by_id(&cities, city_to).expect("Invalid arrival city");
+    let city_from = get_city_by_id(&cities, from_id).expect("Invalid departure city");
+    let city_to = get_city_by_id(&cities, to_id).expect("Invalid arrival city");
 
     println!("Departing from {} to {} on {}", city_from, city_to, date);
 
@@ -120,7 +120,6 @@ pub async fn book_ticket(
     );
     driver.goto(&url).await?;
 
-    println!("Loaded URL: {}", url);
     println!("Loaded URL: {}", url);
 
     // /html/body/div[2]/div[6]/div/div/table/tbody/tr/td[4]/form/button
