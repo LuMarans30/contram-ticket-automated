@@ -55,6 +55,7 @@ jobs:
           if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
             sudo apt-get --yes update
             sudo apt-get --yes install libssl-dev
+            sudo apt-get --yes install openssl
           fi
       - name: Build binary
         uses: houseabsolute/actions-rust-cross@v0
